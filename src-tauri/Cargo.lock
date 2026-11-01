@@ -2371,6 +2371,7 @@ dependencies = [
  "argon2",
  "base64 0.22.1",
  "keyring",
+ "libc",
  "rand",
  "rusqlite",
  "serde",
