@@ -1,10 +1,11 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { LoaderCircle, Plus, Server, X } from "lucide-react";
+import { LoaderCircle, Plus, RefreshCw, Server, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../api";
-import type { TerminalTab } from "../types";
+import type { TerminalPrompt, TerminalTab } from "../types";
+import { HostKeyChangedDialog, HostPromptDialog } from "./HostKeyDialog";
 
 interface TerminalOutput {
   sessionId: string;
@@ -13,8 +14,19 @@ interface TerminalOutput {
 
 interface TerminalStatus {
   sessionId: string;
-  status: "connecting" | "connected" | "closed" | "error";
+  status: "connecting" | "connected" | "closed" | "error" | "host_key_changed";
   message?: string;
+}
+
+interface PromptRequest extends TerminalPrompt {
+  tabId: string;
+}
+
+interface KeyChange {
+  tabId: string;
+  hostId: number;
+  address: string;
+  message: string;
 }
 
 interface TerminalWorkspaceProps {
@@ -23,6 +35,8 @@ interface TerminalWorkspaceProps {
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onNewHost: () => void;
+  onReconnect: (id: string) => void;
+  onError: (message: string) => void;
 }
 
 export function TerminalWorkspace({
@@ -31,7 +45,57 @@ export function TerminalWorkspace({
   onActivate,
   onClose,
   onNewHost,
+  onReconnect,
+  onError,
 }: TerminalWorkspaceProps) {
+  const [prompts, setPrompts] = useState<PromptRequest[]>([]);
+  const [keyChanges, setKeyChanges] = useState<KeyChange[]>([]);
+  const [busy, setBusy] = useState(false);
+  const prompt = prompts[0];
+  const keyChange = keyChanges[0];
+
+  const dismissPrompt = () => setPrompts((current) => current.slice(1));
+  const dismissKeyChange = () => setKeyChanges((current) => current.slice(1));
+
+  const answerPrompt = async (answer: string) => {
+    if (!prompt) return;
+    setBusy(true);
+    try {
+      await api.answerPrompt(prompt.sessionId, answer);
+      dismissPrompt();
+    } catch (error) {
+      onError(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelPrompt = async () => {
+    if (!prompt) return;
+    const current = prompt;
+    dismissPrompt();
+    if (current.kind === "host_key") {
+      await api.answerPrompt(current.sessionId, "no").catch(() => undefined);
+      return;
+    }
+    await api.disconnect(current.sessionId).catch(() => undefined);
+  };
+
+  const replaceHostKey = async () => {
+    if (!keyChange) return;
+    setBusy(true);
+    try {
+      await api.forgetHostKey(keyChange.hostId);
+      const tabId = keyChange.tabId;
+      dismissKeyChange();
+      onReconnect(tabId);
+    } catch (error) {
+      onError(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <main className="workspace">
       <div className="tab-bar">
@@ -72,20 +136,76 @@ export function TerminalWorkspace({
           </div>
         )}
         {tabs.map((tab) => (
-          <TerminalPane key={tab.id} tab={tab} active={activeTabId === tab.id} />
+          <TerminalPane
+            key={tab.id}
+            tab={tab}
+            active={activeTabId === tab.id}
+            onPrompt={(request) => {
+              setPrompts((current) => [...current.filter((item) => item.tabId !== tab.id), request]);
+              onActivate(tab.id);
+            }}
+            onHostKeyChanged={(change) => {
+              setKeyChanges((current) => [
+                ...current.filter((item) => item.tabId !== tab.id),
+                change,
+              ]);
+              onActivate(tab.id);
+            }}
+          />
         ))}
       </div>
+
+      {prompt && (
+        <HostPromptDialog
+          title={prompt.kind === "host_key" ? "Verify host key" : prompt.prompt}
+          detail={
+            prompt.kind === "host_key"
+              ? "This host is not in known hosts yet. Compare the fingerprint, then trust it once."
+              : "OpenSSH is waiting for a response before the session can continue."
+          }
+          message={prompt.kind === "host_key" ? prompt.message : ""}
+          secret={prompt.secret}
+          confirmLabel={prompt.kind === "host_key" ? "Trust this key" : "Send"}
+          busy={busy}
+          onConfirm={(answer) => void answerPrompt(answer)}
+          onCancel={() => void cancelPrompt()}
+        />
+      )}
+      {!prompt && keyChange && (
+        <HostKeyChangedDialog
+          address={keyChange.address}
+          message={keyChange.message}
+          busy={busy}
+          onReplace={() => void replaceHostKey()}
+          onClose={dismissKeyChange}
+        />
+      )}
     </main>
   );
 }
 
-function TerminalPane({ tab, active }: { tab: TerminalTab; active: boolean }) {
+function TerminalPane({
+  tab,
+  active,
+  onPrompt,
+  onHostKeyChanged,
+}: {
+  tab: TerminalTab;
+  active: boolean;
+  onPrompt: (prompt: PromptRequest) => void;
+  onHostKeyChanged: (change: KeyChange) => void;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const onPromptRef = useRef(onPrompt);
+  const onHostKeyChangedRef = useRef(onHostKeyChanged);
   const [status, setStatus] = useState<TerminalStatus["status"]>("connecting");
   const [message, setMessage] = useState("");
+  const [retryKey, setRetryKey] = useState(0);
+  onPromptRef.current = onPrompt;
+  onHostKeyChangedRef.current = onHostKeyChanged;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -121,10 +241,48 @@ function TerminalPane({ tab, active }: { tab: TerminalTab; active: boolean }) {
     fit.fit();
     terminalRef.current = terminal;
     fitRef.current = fit;
+    setStatus("connecting");
+    setMessage("");
     terminal.writeln(`\x1b[90mConnecting to ${tab.host.username}@${tab.host.address}…\x1b[0m`);
+
+    const pasteText = (text: string) => {
+      if (!text) return;
+      if (
+        text.length > 2048 &&
+        !window.confirm(`Paste ${text.length.toLocaleString()} characters into this session?`)
+      ) {
+        return;
+      }
+      terminal.paste(text);
+    };
+
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown" || !event.ctrlKey || !event.shiftKey) return true;
+      if (event.key === "C" || event.key === "c") {
+        const selection = terminal.getSelection();
+        if (selection) void navigator.clipboard.writeText(selection).catch(() => undefined);
+        return false;
+      }
+      if (event.key === "V" || event.key === "v") {
+        void navigator.clipboard.readText().then(pasteText).catch(() => undefined);
+        return false;
+      }
+      return true;
+    });
+    const selection = terminal.onSelectionChange(() => {
+      const text = terminal.getSelection();
+      if (text) void navigator.clipboard.writeText(text).catch(() => undefined);
+    });
+    const onMiddleClick = (event: MouseEvent) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      void navigator.clipboard.readText().then(pasteText).catch(() => undefined);
+    };
+    container.addEventListener("mousedown", onMiddleClick);
 
     let outputUnlisten: UnlistenFn | undefined;
     let statusUnlisten: UnlistenFn | undefined;
+    let promptUnlisten: UnlistenFn | undefined;
     let disposed = false;
 
     const dataDisposable = terminal.onData((data) => {
@@ -135,7 +293,7 @@ function TerminalPane({ tab, active }: { tab: TerminalTab; active: boolean }) {
 
     const start = async () => {
       try {
-        [outputUnlisten, statusUnlisten] = await Promise.all([
+        [outputUnlisten, statusUnlisten, promptUnlisten] = await Promise.all([
           listen<TerminalOutput>("terminal-output", ({ payload }) => {
             if (payload.sessionId === sessionRef.current) {
               terminal.write(new Uint8Array(payload.data));
@@ -149,12 +307,25 @@ function TerminalPane({ tab, active }: { tab: TerminalTab; active: boolean }) {
               terminal.writeln(`\r\n\x1b[31m${payload.message ?? "Connection failed"}\x1b[0m`);
             } else if (payload.status === "closed") {
               terminal.writeln("\r\n\x1b[90mConnection closed.\x1b[0m");
+            } else if (payload.status === "host_key_changed") {
+              terminal.writeln("\r\n\x1b[33mHost key changed. Confirm the new key before reconnecting.\x1b[0m");
+              onHostKeyChangedRef.current({
+                tabId: tab.id,
+                hostId: tab.host.id,
+                address: tab.host.address,
+                message: payload.message ?? "",
+              });
             }
+          }),
+          listen<TerminalPrompt>("terminal-prompt", ({ payload }) => {
+            if (payload.sessionId !== sessionRef.current) return;
+            onPromptRef.current({ ...payload, tabId: tab.id });
           }),
         ]);
         if (disposed) {
           outputUnlisten?.();
           statusUnlisten?.();
+          promptUnlisten?.();
           return;
         }
         const sessionId = crypto.randomUUID();
@@ -183,13 +354,16 @@ function TerminalPane({ tab, active }: { tab: TerminalTab; active: boolean }) {
     return () => {
       disposed = true;
       observer.disconnect();
+      container.removeEventListener("mousedown", onMiddleClick);
       dataDisposable.dispose();
+      selection.dispose();
       outputUnlisten?.();
       statusUnlisten?.();
+      promptUnlisten?.();
       if (sessionRef.current) void api.disconnect(sessionRef.current).catch(() => undefined);
       terminal.dispose();
     };
-  }, [tab.host.address, tab.host.id, tab.host.username]);
+  }, [retryKey, tab.generation, tab.host.address, tab.host.id, tab.host.username, tab.id]);
 
   useEffect(() => {
     if (active) {
@@ -206,7 +380,42 @@ function TerminalPane({ tab, active }: { tab: TerminalTab; active: boolean }) {
         <span className={`connection-state ${status}`} />
         <span>{tab.host.username}@{tab.host.address}:{tab.host.port}</span>
         {status === "connecting" && <LoaderCircle className="spin" size={13} />}
-        {status === "error" && <span className="session-error" title={message}>Connection failed</span>}
+        {status === "connecting" && message && <span className="session-message">{message}</span>}
+        {(status === "error" || status === "closed" || status === "host_key_changed") && (
+          <div className="session-disconnected">
+            <span className="session-error" title={message}>
+              {status === "host_key_changed"
+                ? "Host key changed"
+                : status === "error"
+                  ? "Connection failed"
+                  : "Connection closed"}
+            </span>
+            {status === "host_key_changed" && (
+              <button
+                className="session-retry"
+                type="button"
+                onClick={() =>
+                  onHostKeyChanged({
+                    tabId: tab.id,
+                    hostId: tab.host.id,
+                    address: tab.host.address,
+                    message,
+                  })
+                }
+              >
+                Review key
+              </button>
+            )}
+            <button
+              className="session-retry"
+              type="button"
+              onClick={() => setRetryKey((key) => key + 1)}
+              title="Start a new SSH session"
+            >
+              <RefreshCw size={12} /> Retry
+            </button>
+          </div>
+        )}
       </div>
       <div ref={containerRef} className="terminal-container" />
     </section>

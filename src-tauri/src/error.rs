@@ -12,8 +12,6 @@ pub enum AppError {
     InvalidEncryptedData,
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("SSH error: {0}")]
-    Ssh(#[from] ssh2::Error),
     #[error("Invalid input: {0}")]
     InvalidInput(String),
     #[error("Item not found")]

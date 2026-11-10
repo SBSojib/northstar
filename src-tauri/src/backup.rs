@@ -139,6 +139,7 @@ mod tests {
                     password: "secret-value".into(),
                 },
             }],
+            known_hosts: String::new(),
         };
 
         write(&path, "strong-password", &data).expect("write backup");

@@ -5,16 +5,33 @@ TypeScript, Rust, SQLite, and xterm.js.
 
 ## MVP features
 
-- Password and imported private-key authentication
+- Password, imported private-key, and ssh-agent authentication
+- Host key verification: the fingerprint is shown once, then stored, and a
+  changed key stops the session until you confirm it
 - Nested host groups and local search
-- Multiple interactive terminal tabs
+- Multiple interactive terminal tabs, each one a PTY running the system
+  OpenSSH client
 - Local SQLite storage
 - AES-256-GCM encrypted credentials with the master key stored in the Ubuntu
   Secret Service keyring
-- Password-protected portable backup and non-destructive restore
+- Password-protected portable backup and non-destructive restore, including
+  known host keys
 
 Private key contents are imported and encrypted; their source paths are not
 saved.
+
+## Connections
+
+Each terminal runs Ubuntu’s `ssh`. ProxyJump and Match blocks in
+`~/.ssh/config` apply. Agent authentication also uses the keys and
+certificates from that config and from `ssh-agent`. Northstar keeps its own
+`known_hosts` file in the application data directory and also reads
+`~/.ssh/known_hosts`. New keys are written to Northstar’s file.
+
+The first connection to a host shows the key fingerprint and waits for you to
+trust it. If that key later changes, the session stops until you choose to
+replace the saved key. SSH agent hosts use the keys already loaded in
+`ssh-agent` and do not store a secret.
 
 ## Ubuntu setup
 
@@ -50,10 +67,10 @@ src-tauri/target/release/bundle/deb/Northstar SSH_<version>_amd64.deb
 Install it with apt. Use the quoted path because the filename contains a space:
 
 ```bash
-sudo apt install "./src-tauri/target/release/bundle/deb/Northstar SSH_0.2.1_amd64.deb"
+sudo apt install "./src-tauri/target/release/bundle/deb/Northstar SSH_0.3.0_amd64.deb"
 ```
 
-Replace `0.2.1` with the version shown in that directory. Upgrades keep saved hosts; they live outside the package in the application data directory.
+Replace `0.3.0` with the version shown in that directory. Upgrades keep saved hosts; they live outside the package in the application data directory.
 
 ## Storage
 
@@ -64,9 +81,10 @@ under the service `app.northstar.ssh`.
 
 Normal package upgrades and reinstalls preserve this application-data
 directory. Use the **Backup** action in the sidebar to create a portable
-`.northstar` file. It contains hosts, nested groups, and credentials encrypted
-with your chosen password. On another Northstar installation, choose
-**Restore**; imported items are merged with the existing library.
+`.northstar` file. It contains hosts, nested groups, known host keys, and
+credentials encrypted with your chosen password. On another Northstar
+installation, choose **Restore**; imported items are merged with the existing
+library.
 
 A raw copy of `northstar.db` is not portable because its encryption key remains
 in the original machine's system keyring.

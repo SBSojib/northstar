@@ -49,12 +49,16 @@ impl Database {
                 port INTEGER NOT NULL DEFAULT 22,
                 username TEXT NOT NULL,
                 group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL,
-                auth_type TEXT NOT NULL CHECK(auth_type IN ('password', 'private_key')),
+                auth_type TEXT NOT NULL CHECK(auth_type IN ('password', 'private_key', 'agent')),
                 encrypted_credential BLOB NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-
+            ",
+        )?;
+        migrate_host_auth(&connection)?;
+        connection.execute_batch(
+            "
             CREATE INDEX IF NOT EXISTS idx_groups_parent_id ON groups(parent_id);
             CREATE INDEX IF NOT EXISTS idx_hosts_group_id ON hosts(group_id);
             CREATE INDEX IF NOT EXISTS idx_hosts_name ON hosts(name);
@@ -158,7 +162,10 @@ impl Database {
                 "Port must be between 1 and 65535".into(),
             ));
         }
-        if input.auth_type != "password" && input.auth_type != "private_key" {
+        if !matches!(
+            input.auth_type.as_str(),
+            "password" | "private_key" | "agent"
+        ) {
             return Err(AppError::InvalidInput(
                 "Unsupported authentication type".into(),
             ));
@@ -226,6 +233,29 @@ impl Database {
         let connection = self.lock()?;
         connection.execute("DELETE FROM hosts WHERE id = ?1", [id])?;
         Ok(())
+    }
+
+    pub fn host_by_id(&self, id: i64) -> AppResult<Host> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT id, name, address, port, username, group_id, auth_type
+                 FROM hosts WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(Host {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        address: row.get(2)?,
+                        port: row.get(3)?,
+                        username: row.get(4)?,
+                        group_id: row.get(5)?,
+                        auth_type: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(AppError::NotFound)
     }
 
     pub fn host_with_credential(&self, id: i64) -> AppResult<(Host, Credential)> {
@@ -315,6 +345,7 @@ impl Database {
             version: 1,
             groups,
             hosts,
+            known_hosts: String::new(),
         })
     }
 
@@ -356,6 +387,7 @@ impl Database {
             let credential_type = match &host.credential {
                 Credential::Password { .. } => "password",
                 Credential::PrivateKey { .. } => "private_key",
+                Credential::Agent => "agent",
             };
             if host.auth_type != credential_type {
                 return Err(AppError::InvalidInput(
@@ -394,6 +426,7 @@ impl Database {
                 .map(|password| Credential::Password {
                     password: password.clone(),
                 })),
+            "agent" => Ok(Some(Credential::Agent)),
             "private_key" => {
                 let Some(path) = input
                     .private_key_path
@@ -435,6 +468,46 @@ fn required(value: String, label: &str) -> AppResult<String> {
     } else {
         Ok(trimmed.to_owned())
     }
+}
+
+fn migrate_host_auth(connection: &Connection) -> AppResult<()> {
+    let sql: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'hosts'",
+        [],
+        |row| row.get(0),
+    )?;
+    if sql.contains("'agent'") {
+        return Ok(());
+    }
+    connection.execute_batch(
+        "
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE hosts_migrated (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            address TEXT NOT NULL,
+            port INTEGER NOT NULL DEFAULT 22,
+            username TEXT NOT NULL,
+            group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL,
+            auth_type TEXT NOT NULL CHECK(auth_type IN ('password', 'private_key', 'agent')),
+            encrypted_credential BLOB NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO hosts_migrated (
+            id, name, address, port, username, group_id, auth_type,
+            encrypted_credential, created_at, updated_at
+        )
+        SELECT
+            id, name, address, port, username, group_id, auth_type,
+            encrypted_credential, created_at, updated_at
+        FROM hosts;
+        DROP TABLE hosts;
+        ALTER TABLE hosts_migrated RENAME TO hosts;
+        PRAGMA foreign_keys = ON;
+        ",
+    )?;
+    Ok(())
 }
 
 fn database_path(mut data_dir: PathBuf) -> PathBuf {
@@ -645,5 +718,73 @@ mod tests {
         let stored = String::from_utf8_lossy(&encrypted);
         assert!(!stored.contains("test-key-material"));
         assert!(!stored.contains("key-passphrase"));
+    }
+
+    #[test]
+    fn stores_an_agent_host_without_a_saved_secret() {
+        let database = test_database();
+        let host_id = database
+            .save_host(HostInput {
+                id: None,
+                name: "Agent host".into(),
+                address: "agent.example.com".into(),
+                port: 22,
+                username: "ubuntu".into(),
+                group_id: None,
+                auth_type: "agent".into(),
+                password: None,
+                private_key_path: None,
+                private_key_passphrase: None,
+            })
+            .expect("save agent host");
+        let (_, credential) = database
+            .host_with_credential(host_id)
+            .expect("read agent credential");
+        assert!(matches!(credential, Credential::Agent));
+        let exported = database.export_data().expect("export");
+        assert!(matches!(exported.hosts[0].credential, Credential::Agent));
+    }
+
+    #[test]
+    fn migrates_a_library_created_before_agent_auth() {
+        let connection = Connection::open_in_memory().expect("open database");
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE hosts (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    address TEXT NOT NULL,
+                    port INTEGER NOT NULL DEFAULT 22,
+                    username TEXT NOT NULL,
+                    group_id INTEGER,
+                    auth_type TEXT NOT NULL CHECK(auth_type IN ('password', 'private_key')),
+                    encrypted_credential BLOB NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                INSERT INTO hosts (name, address, port, username, auth_type, encrypted_credential)
+                VALUES ('Legacy', 'legacy.example', 22, 'root', 'password', X'00');
+                ",
+            )
+            .expect("create legacy schema");
+        let database = Database::from_connection(connection, Vault::for_test())
+            .expect("migrate legacy database");
+        let legacy = database.host_by_id(1).expect("legacy host survived");
+        assert_eq!(legacy.name, "Legacy");
+        database
+            .save_host(HostInput {
+                id: None,
+                name: "Agent".into(),
+                address: "agent.example".into(),
+                port: 22,
+                username: "ubuntu".into(),
+                group_id: None,
+                auth_type: "agent".into(),
+                password: None,
+                private_key_path: None,
+                private_key_passphrase: None,
+            })
+            .expect("agent auth is accepted after migration");
     }
 }

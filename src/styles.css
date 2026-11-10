@@ -127,8 +127,17 @@ button:disabled { opacity: .5; cursor: default; }
 }
 .connection-state { width: 6px; height: 6px; border-radius: 50%; background: #78808d; }
 .connection-state.connected { background: #62ae79; box-shadow: 0 0 6px #62ae7977; }
+.connection-state.error, .connection-state.host_key_changed { background: #e0af68; }
 .connection-state.error { background: #e66e81; }
-.session-error { margin-left: auto; color: #d66d7e; }
+.session-message { color: #9aa6b8; }
+.session-disconnected { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.session-error { color: #d66d7e; }
+.session-retry {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px;
+  border: 1px solid #343a48; border-radius: 4px; color: #aeb8c8;
+  background: #1c212a; font: inherit; cursor: pointer;
+}
+.session-retry:hover { border-color: #4e5c75; color: #e2e7ef; background: #252c38; }
 .terminal-container { flex: 1; min-height: 0; padding: 9px 7px 5px 11px; }
 .terminal-container .xterm { height: 100%; }
 .welcome {
@@ -184,6 +193,14 @@ button:disabled { opacity: .5; cursor: default; }
 .file-picker { display: flex; gap: 7px; }
 .file-picker .secondary-button { flex: 0 0 auto; height: 36px; }
 .security-note { margin: 0; color: #66707e; font-size: 10px; line-height: 1.5; }
+.fingerprint-value {
+  color: #dbe4f5; font: 13px/1.45 ui-monospace, "Ubuntu Mono", monospace; word-break: break-all;
+}
+.host-key-excerpt {
+  margin: 0; max-height: 180px; padding: 10px 12px; overflow: auto; border-radius: 7px;
+  color: #c5ccd6; background: #11141a; font: 11px/1.45 ui-monospace, "Ubuntu Mono", monospace;
+  white-space: pre-wrap;
+}
 .field-error { margin: -7px 0 0; color: #ef8293; font-size: 10px; }
 .dialog-footer {
   display: flex; align-items: center; gap: 8px; padding: 13px 20px;

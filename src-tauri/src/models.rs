@@ -65,6 +65,16 @@ pub struct TerminalStatus {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalPrompt {
+    pub session_id: String,
+    pub kind: String,
+    pub prompt: String,
+    pub message: String,
+    pub secret: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Credential {
@@ -75,6 +85,7 @@ pub enum Credential {
         private_key: String,
         passphrase: Option<String>,
     },
+    Agent,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,6 +93,8 @@ pub struct BackupData {
     pub version: u32,
     pub groups: Vec<BackupGroup>,
     pub hosts: Vec<BackupHost>,
+    #[serde(default)]
+    pub known_hosts: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

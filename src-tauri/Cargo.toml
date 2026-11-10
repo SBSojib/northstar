@@ -1,6 +1,6 @@
 [package]
 name = "northstar-ssh"
-version = "0.2.1"
+version = "0.3.0"
 description = "A focused desktop SSH client"
 authors = ["Northstar Contributors"]
 edition = "2021"
@@ -22,7 +22,6 @@ rand = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 thiserror = "2"

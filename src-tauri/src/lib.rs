@@ -1,6 +1,8 @@
+pub mod askpass;
 mod backup;
 mod database;
 mod error;
+mod known_hosts;
 mod models;
 mod ssh;
 mod vault;
@@ -37,20 +39,34 @@ fn delete_host(database: State<'_, Database>, id: i64) -> AppResult<()> {
 }
 
 #[tauri::command]
-fn backup_library(database: State<'_, Database>, path: String, password: String) -> AppResult<()> {
-    let data = database.export_data()?;
+fn backup_library(
+    app: AppHandle,
+    database: State<'_, Database>,
+    path: String,
+    password: String,
+) -> AppResult<()> {
+    let mut data = database.export_data()?;
+    data.known_hosts = known_hosts::read(&app)?;
     backup::write(std::path::Path::new(&path), &password, &data)
 }
 
 #[tauri::command]
 fn restore_library(
+    app: AppHandle,
     database: State<'_, Database>,
     path: String,
     password: String,
 ) -> AppResult<String> {
     let data = backup::read(std::path::Path::new(&path), &password)?;
+    let imported_keys = known_hosts::merge(&app, &data.known_hosts)?;
     let (groups, hosts) = database.import_data(data)?;
-    Ok(format!("Imported {hosts} hosts and {groups} groups"))
+    if imported_keys > 0 {
+        Ok(format!(
+            "Imported {hosts} hosts, {groups} groups, and {imported_keys} host keys"
+        ))
+    } else {
+        Ok(format!("Imported {hosts} hosts and {groups} groups"))
+    }
 }
 
 #[tauri::command]
@@ -86,6 +102,21 @@ fn disconnect_ssh(ssh: State<'_, SshManager>, session_id: String) -> AppResult<(
     ssh.disconnect(&session_id)
 }
 
+#[tauri::command]
+fn answer_ssh_prompt(
+    ssh: State<'_, SshManager>,
+    session_id: String,
+    answer: String,
+) -> AppResult<()> {
+    ssh.answer(&session_id, answer)
+}
+
+#[tauri::command]
+fn forget_host_key(app: AppHandle, database: State<'_, Database>, host_id: i64) -> AppResult<()> {
+    let host = database.host_by_id(host_id)?;
+    known_hosts::forget(&app, &host.address, host.port)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -106,7 +137,9 @@ pub fn run() {
             connect_ssh,
             write_ssh,
             resize_ssh,
-            disconnect_ssh
+            disconnect_ssh,
+            answer_ssh_prompt,
+            forget_host_key
         ])
         .run(tauri::generate_context!())
         .expect("error while running Northstar SSH");

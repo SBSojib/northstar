@@ -2,6 +2,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  Fingerprint,
   Folder,
   FolderPlus,
   KeyRound,
@@ -72,7 +73,13 @@ export function Sidebar(props: SidebarProps) {
       tabIndex={0}
       onKeyDown={(event) => event.key === "Enter" && props.onOpenHost(host)}
     >
-      {host.authType === "private_key" ? <KeyRound size={14} /> : <Server size={14} />}
+      {host.authType === "private_key" ? (
+        <KeyRound size={14} />
+      ) : host.authType === "agent" ? (
+        <Fingerprint size={14} />
+      ) : (
+        <Server size={14} />
+      )}
       <span className="tree-label">
         <span>{host.name}</span>
         <small>{host.username}@{host.address}</small>

@@ -1,4 +1,4 @@
-export type AuthType = "password" | "private_key";
+export type AuthType = "password" | "private_key" | "agent";
 
 export interface Group {
   id: number;
@@ -43,4 +43,13 @@ export interface HostInput {
 export interface TerminalTab {
   id: string;
   host: Host;
+  generation: number;
+}
+
+export interface TerminalPrompt {
+  sessionId: string;
+  kind: "host_key" | "interactive";
+  prompt: string;
+  message: string;
+  secret: boolean;
 }

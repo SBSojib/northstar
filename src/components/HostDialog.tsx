@@ -142,9 +142,21 @@ export function HostDialog({
             >
               Private key
             </button>
+            <button
+              type="button"
+              className={authType === "agent" ? "active" : ""}
+              onClick={() => setAuthType("agent")}
+            >
+              SSH agent
+            </button>
           </div>
 
-          {authType === "password" ? (
+          {authType === "agent" ? (
+            <p className="security-note">
+              Northstar will use the keys already loaded in ssh-agent. Nothing secret is stored
+              for this host. ProxyJump and certificates from your OpenSSH config still apply.
+            </p>
+          ) : authType === "password" ? (
             <label className="field">
               <span>Password</span>
               <input
@@ -183,10 +195,12 @@ export function HostDialog({
               </label>
             </>
           )}
-          <p className="security-note">
-            The credential is encrypted before it enters SQLite. Private key files are imported;
-            the original path is not saved.
-          </p>
+          {authType !== "agent" && (
+            <p className="security-note">
+              The credential is encrypted before it enters SQLite. Private key files are imported;
+              the original path is not saved.
+            </p>
+          )}
         </div>
 
         <footer className="dialog-footer">

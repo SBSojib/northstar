@@ -44,9 +44,17 @@ export default function App() {
   }, [loadLibrary, query]);
 
   const openHost = (host: Host) => {
-    const tab: TerminalTab = { id: crypto.randomUUID(), host };
+    const tab: TerminalTab = { id: crypto.randomUUID(), host, generation: 0 };
     setTabs((current) => [...current, tab]);
     setActiveTabId(tab.id);
+  };
+
+  const reconnectTab = (id: string) => {
+    setTabs((current) =>
+      current.map((tab) =>
+        tab.id === id ? { ...tab, generation: tab.generation + 1 } : tab,
+      ),
+    );
   };
 
   const closeTab = (id: string) => {
@@ -186,6 +194,8 @@ export default function App() {
         onActivate={setActiveTabId}
         onClose={closeTab}
         onNewHost={() => setDialog({ type: "new-host" })}
+        onReconnect={reconnectTab}
+        onError={setError}
       />
 
       {error && (

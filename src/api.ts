@@ -19,6 +19,10 @@ export const api = {
     invoke<void>("resize_ssh", { sessionId, cols, rows }),
   disconnect: (sessionId: string) =>
     invoke<void>("disconnect_ssh", { sessionId }),
+  answerPrompt: (sessionId: string, answer: string) =>
+    invoke<void>("answer_ssh_prompt", { sessionId, answer }),
+  forgetHostKey: (hostId: number) =>
+    invoke<void>("forget_host_key", { hostId }),
 };
 
 export function errorMessage(error: unknown): string {
